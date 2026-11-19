@@ -403,6 +403,9 @@ def run_json_mode():
             perf_inputs[n] = (generate_cross(n), generate_x(n))       # 없으면 생성기로 (예: 3×3)
     print_performance("[3] 성능 분석", PERF_SIZES, perf_inputs)
 
+    print()
+    print_summary(results)
+
 
 # ================================================================
 # 10. 성능 분석
@@ -416,6 +419,28 @@ def print_performance(title, sizes, inputs):
         pattern, filter_matrix = inputs[n]
         ms = measure_ms(mac, pattern, filter_matrix)
         print(f"{f'{n}×{n}':<8}{ms:>14.4f}{n * n:>14}")
+
+
+# ================================================================
+# 11. 결과 요약
+# ================================================================
+def print_summary(results):
+    """전체/통과/실패 수와 실패 케이스 목록을 출력한다."""
+    total = len(results)
+    passed = sum(1 for _, ok, _ in results if ok)
+    failed = [(key, reason) for key, ok, reason in results if not ok]
+
+    print_header("[4] 결과 요약")
+    print(f"총 테스트: {total}개")
+    print(f"통과: {passed}개")
+    print(f"실패: {len(failed)}개")
+    if failed:
+        print("실패 케이스:")
+        for key, reason in failed:
+            print(f"  - {key}: {reason}")
+    else:
+        print("실패 케이스 없음 (라벨 정규화 + epsilon 비교 정책 덕분)")
+    print("\n(상세 원인 분석 및 복잡도 설명은 README.md 의 '결과 리포트' 섹션 참고)")
 
 
 # ================================================================
