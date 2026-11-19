@@ -6,10 +6,13 @@ NPU(AI 전용 칩)가 하는 핵심 계산인 MAC(곱하고 더하기)을
 
 실행: python3 main.py
   1. 사용자 입력 (3x3)
+  2. data.json 분석
 
 외부 라이브러리(NumPy 등) 없이 표준 라이브러리만 사용한다.
 """
 
+import json
+import os
 import time
 
 # ----------------------------------------------------------------
@@ -17,6 +20,16 @@ import time
 # ----------------------------------------------------------------
 EPSILON = 1e-9      # 두 점수 차이가 이것보다 작으면 '같다(동점)'고 본다
 REPEAT = 10         # 시간 측정 반복 횟수 (최소 10회)
+CROSS = "Cross"     # 표준 라벨 1
+X = "X"             # 표준 라벨 2
+DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data.json")
+
+# 여러 가지 모양으로 들어오는 라벨을 표준 라벨(Cross / X)로 바꾸는 표
+LABEL_MAP = {
+    "+": CROSS,
+    "cross": CROSS,
+    "x": X,
+}
 LINE = "#" + "-" * 39
 
 
@@ -101,6 +114,20 @@ def measure_ms(func, first, second, repeat=REPEAT):
         func(first, second)
     end = time.perf_counter()
     return (end - start) / repeat * 1000
+
+
+# ================================================================
+# 5. 라벨 정규화
+# ================================================================
+def normalize_label(raw):
+    """'+', 'cross', 'x', 'X', ' Cross ' 등을 표준 라벨 Cross / X 로 바꾼다.
+
+    모르는 라벨이면 None 을 돌려준다.
+    """
+    if not isinstance(raw, str):
+        return None
+    key = raw.strip().lower()  # 앞뒤 공백 제거 + 소문자로 통일
+    return LABEL_MAP.get(key)
 
 
 # ================================================================
@@ -190,6 +217,83 @@ def run_user_mode():
 
 
 # ================================================================
+# 9. 모드 2: data.json 분석
+# ================================================================
+def load_json(path):
+    """JSON 파일을 읽는다. 실패하면 (None, 오류 메시지)."""
+    try:
+        with open(path, "r", encoding="utf-8") as file:
+            return json.load(file), None
+    except FileNotFoundError:
+        return None, f"파일이 없습니다: {path}"
+    except json.JSONDecodeError as error:
+        return None, f"JSON 형식 오류: {error}"
+    except OSError as error:
+        return None, f"파일을 읽을 수 없습니다: {error}"
+
+
+def load_filters(raw_filters):
+    """filters 를 읽어서 {N: {"Cross": 행렬, "X": 행렬}} 로 정리한다.
+
+    필터 키('cross', 'x')도 표준 라벨로 정규화한다.
+    문제가 있는 크기는 건너뛰고 이유를 출력한다. (프로그램은 멈추지 않음)
+    """
+    filters = {}
+    if not isinstance(raw_filters, dict):
+        print("✗ filters 항목이 없거나 형식이 잘못되었습니다.")
+        return filters
+
+    for size_key, group in raw_filters.items():
+        if not isinstance(size_key, str) or not size_key.startswith("size_") or not size_key[5:].isdigit():
+            print(f"✗ {size_key}: 필터 키 형식 오류 (size_N 이어야 함)")
+            continue
+        n = int(size_key[5:])
+        if not isinstance(group, dict):
+            print(f"✗ {size_key}: 필터 묶음이 dict 가 아닙니다")
+            continue
+
+        loaded = {}
+        problem = None
+        for raw_label, matrix in group.items():
+            label = normalize_label(raw_label)
+            if label is None:
+                problem = f"알 수 없는 필터 라벨 {raw_label!r}"
+                break
+            size, reason = check_matrix(matrix)
+            if size is None:
+                problem = f"{label} 필터 형식 오류 ({reason})"
+                break
+            if size != n:
+                problem = f"{label} 필터 크기 불일치 (키는 {n}×{n}, 실제 {size}×{size})"
+                break
+            loaded[label] = matrix
+        if problem is None and (CROSS not in loaded or X not in loaded):
+            problem = "Cross 와 X 필터가 둘 다 있어야 합니다"
+        if problem is not None:
+            print(f"✗ {size_key} 필터 로드 실패: {problem}")
+            continue
+
+        filters[n] = loaded
+        print(f"✓ {size_key} 필터 로드 완료 ({CROSS}, {X})")
+    return filters
+
+
+def run_json_mode():
+    """모드 2: 필터 로드 → 패턴 분석 → 성능 분석 → 결과 요약"""
+    data, error = load_json(DATA_FILE)
+    if data is None:
+        print(f"⚠️ data.json 을 불러오지 못했습니다. ({error})")
+        print("   main.py 와 같은 폴더에 data.json 이 있는지 확인하세요.")
+        return
+    if not isinstance(data, dict):
+        print("⚠️ data.json 최상위 구조가 dict({...}) 가 아닙니다.")
+        return
+
+    print_header("[1] 필터 로드")
+    filters = load_filters(data.get("filters"))
+
+
+# ================================================================
 # 메인: 모드 선택
 # ================================================================
 def main():
@@ -204,7 +308,7 @@ def main():
             if choice == "1":
                 run_user_mode()
             elif choice == "2":
-                print("🚧 아직 준비 중인 기능입니다.")
+                run_json_mode()
             elif choice == "0":
                 print("👋 시뮬레이터를 종료합니다.")
                 break
