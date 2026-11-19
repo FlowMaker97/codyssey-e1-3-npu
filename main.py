@@ -13,6 +13,7 @@ NPU(AI 전용 칩)가 하는 핵심 계산인 MAC(곱하고 더하기)을
 
 import json
 import os
+import re
 import time
 
 # ----------------------------------------------------------------
@@ -22,6 +23,7 @@ EPSILON = 1e-9      # 두 점수 차이가 이것보다 작으면 '같다(동점
 REPEAT = 10         # 시간 측정 반복 횟수 (최소 10회)
 CROSS = "Cross"     # 표준 라벨 1
 X = "X"             # 표준 라벨 2
+UNDECIDED = "UNDECIDED"
 DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data.json")
 
 # 여러 가지 모양으로 들어오는 라벨을 표준 라벨(Cross / X)로 바꾸는 표
@@ -278,6 +280,65 @@ def load_filters(raw_filters):
     return filters
 
 
+def report_fail(reason):
+    """[FAIL] 사유를 출력하고 (False, 사유) 를 돌려준다."""
+    print(f"[FAIL] {reason}")
+    return False, reason
+
+
+def analyze_pattern(key, item, filters):
+    """패턴 1개를 검사/판정한다.
+
+    돌려주는 값: (PASS 여부 True/False, 실패 사유 또는 None)
+    어떤 문제가 있어도 예외로 멈추지 않고 FAIL + 사유를 돌려준다.
+    """
+    print(f"--- {key} ---")
+
+    # (1) 키에서 N 추출: size_{N}_{idx}
+    match = re.fullmatch(r"size_(\d+)_(\d+)", str(key))
+    if match is None:
+        return report_fail("키 형식 오류 (size_{N}_{idx} 형태가 아님)")
+    n = int(match.group(1))
+
+    # (2) 항목 구조 확인
+    if not isinstance(item, dict) or "input" not in item or "expected" not in item:
+        return report_fail("스키마 오류 (input / expected 가 없음)")
+
+    # (3) expected 라벨 정규화
+    expected = normalize_label(item["expected"])
+    if expected is None:
+        return report_fail(f"expected 라벨 오류 ({item['expected']!r} 은 Cross/X 로 바꿀 수 없음)")
+
+    # (4) 해당 크기 필터가 있는지
+    if n not in filters:
+        return report_fail(f"size_{n} 필터가 없음")
+
+    # (5) 패턴 형식/크기 검증
+    size, reason = check_matrix(item["input"])
+    if size is None:
+        return report_fail(f"패턴 형식 오류 ({reason})")
+    if size != n:
+        return report_fail(f"크기 불일치 (패턴 {size}×{size}, 필터 size_{n} = {n}×{n})")
+
+    # (6) MAC 연산 + 판정
+    pattern = item["input"]
+    cross_score = mac(pattern, filters[n][CROSS])
+    x_score = mac(pattern, filters[n][X])
+    result = judge(cross_score, x_score, CROSS, X, UNDECIDED)
+    print(f"Cross 점수: {format_score(cross_score)}")
+    print(f"X 점수: {format_score(x_score)}")
+
+    if result == UNDECIDED:
+        print(f"판정: {UNDECIDED} | expected: {expected} | FAIL (동점 규칙)")
+        return False, f"동점(UNDECIDED) 처리 규칙에 따라 FAIL (|차이| = {abs(cross_score - x_score):.3g} < {EPSILON})"
+    if result == expected:
+        print(f"판정: {result} | expected: {expected} | PASS")
+        return True, None
+    print(f"판정: {result} | expected: {expected} | FAIL")
+    return False, f"판정 불일치 (판정 {result}, expected {expected})"
+
+
+
 def run_json_mode():
     """모드 2: 필터 로드 → 패턴 분석 → 성능 분석 → 결과 요약"""
     data, error = load_json(DATA_FILE)
@@ -291,6 +352,21 @@ def run_json_mode():
 
     print_header("[1] 필터 로드")
     filters = load_filters(data.get("filters"))
+
+    print()
+    print_header("[2] 패턴 분석 (라벨 정규화 적용)")
+    patterns = data.get("patterns")
+    if not isinstance(patterns, dict):
+        print("✗ patterns 항목이 없거나 형식이 잘못되었습니다.")
+        patterns = {}
+
+    results = []  # (키, PASS 여부, 사유) 를 모아 둔다
+    for key, item in patterns.items():
+        try:
+            passed, reason = analyze_pattern(key, item, filters)
+        except Exception as error:  # 예상 못 한 오류도 그 케이스만 FAIL 로 처리 (프로그램은 계속)
+            passed, reason = report_fail(f"예상치 못한 오류: {error}")
+        results.append((key, passed, reason))
 
 
 # ================================================================
