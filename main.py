@@ -32,6 +32,7 @@ LABEL_MAP = {
     "cross": CROSS,
     "x": X,
 }
+PERF_SIZES = [3, 5, 13, 25]
 LINE = "#" + "-" * 39
 
 
@@ -133,6 +134,28 @@ def normalize_label(raw):
 
 
 # ================================================================
+# 6. 패턴 생성기 (N×N 십자가 / X 자동 생성)
+# ================================================================
+def generate_cross(n):
+    """가운데 행과 가운데 열이 1 인 N×N 십자가(+) 패턴"""
+    matrix = create_matrix(n)
+    center = n // 2
+    for i in range(n):
+        set_value(matrix, center, i, 1.0)
+        set_value(matrix, i, center, 1.0)
+    return matrix
+
+
+def generate_x(n):
+    """두 대각선이 1 인 N×N X 패턴"""
+    matrix = create_matrix(n)
+    for i in range(n):
+        set_value(matrix, i, i, 1.0)
+        set_value(matrix, i, n - 1 - i, 1.0)
+    return matrix
+
+
+# ================================================================
 # 7. 출력 도우미
 # ================================================================
 def print_header(title):
@@ -216,6 +239,9 @@ def run_user_mode():
         print(f"판정: 판정 불가 (|A-B| < {EPSILON})")
     else:
         print(f"판정: {result}")
+
+    print()
+    print_performance("[4] 성능 분석 (3×3)", [3], {3: (pattern, filter_a)})
 
 
 # ================================================================
@@ -367,6 +393,29 @@ def run_json_mode():
         except Exception as error:  # 예상 못 한 오류도 그 케이스만 FAIL 로 처리 (프로그램은 계속)
             passed, reason = report_fail(f"예상치 못한 오류: {error}")
         results.append((key, passed, reason))
+
+    print()
+    perf_inputs = {}
+    for n in PERF_SIZES:
+        if n in filters:
+            perf_inputs[n] = (generate_cross(n), filters[n][CROSS])   # data.json 필터 사용
+        else:
+            perf_inputs[n] = (generate_cross(n), generate_x(n))       # 없으면 생성기로 (예: 3×3)
+    print_performance("[3] 성능 분석", PERF_SIZES, perf_inputs)
+
+
+# ================================================================
+# 10. 성능 분석
+# ================================================================
+def print_performance(title, sizes, inputs):
+    """크기별 평균 MAC 시간(ms)과 연산 횟수(N²) 표를 출력한다."""
+    print_header(f"{title} (평균/{REPEAT}회)")
+    print(f"{'크기':<8}{'평균 시간(ms)':>14}{'연산 횟수(N²)':>14}")
+    print("-" * 40)
+    for n in sizes:
+        pattern, filter_matrix = inputs[n]
+        ms = measure_ms(mac, pattern, filter_matrix)
+        print(f"{f'{n}×{n}':<8}{ms:>14.4f}{n * n:>14}")
 
 
 # ================================================================
