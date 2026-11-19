@@ -7,6 +7,7 @@ NPU(AI 전용 칩)가 하는 핵심 계산인 MAC(곱하고 더하기)을
 실행: python3 main.py
   1. 사용자 입력 (3x3)
   2. data.json 분석
+  3. 패턴 생성기 (N 입력 → 십자가/X 자동 생성)
 
 외부 라이브러리(NumPy 등) 없이 표준 라이브러리만 사용한다.
 """
@@ -84,6 +85,23 @@ def mac(pattern, filter_matrix):
     for row in range(n):
         for col in range(n):
             total += pattern[row][col] * filter_matrix[row][col]
+    return total
+
+
+def flatten(matrix):
+    """2차원 리스트를 길이 N² 짜리 1차원 리스트로 편다. (보너스: 메모리 접근 단순화)"""
+    flat = []
+    for row in matrix:
+        for value in row:
+            flat.append(value)
+    return flat
+
+
+def mac_flat(flat_pattern, flat_filter):
+    """1차원으로 편 두 리스트의 MAC 점수. (for 문 1개, 인덱스 1개)"""
+    total = 0.0
+    for index in range(len(flat_pattern)):
+        total += flat_pattern[index] * flat_filter[index]
     return total
 
 
@@ -210,11 +228,27 @@ def read_matrix(name, n=3):
     return matrix
 
 
+def ask_yes_no(prompt):
+    """y/n 을 받을 때까지 묻는다."""
+    while True:
+        answer = input(prompt).strip().lower()
+        if answer in ("y", "yes"):
+            return True
+        if answer in ("n", "no", ""):
+            return False
+        print("  ⚠️ y 또는 n 으로 입력하세요.")
+
+
 def run_user_mode():
     """모드 1: 필터 A, B 입력 → 저장 확인 → 패턴 입력 → MAC → 판정 → 성능(3×3)"""
     print_header("[1] 필터 입력")
-    filter_a = read_matrix("필터 A")
-    filter_b = read_matrix("필터 B")
+    if ask_yes_no("필터를 자동 생성할까요? (A=십자가, B=X) (y/N): "):
+        filter_a = generate_cross(3)
+        filter_b = generate_x(3)
+        print("✓ 패턴 생성기로 필터 A(십자가), B(X)를 만들었습니다.")
+    else:
+        filter_a = read_matrix("필터 A")
+        filter_b = read_matrix("필터 B")
     print("\n✓ 필터 저장 완료")
     print(" 필터 A:")
     print_matrix(filter_a)
@@ -413,12 +447,16 @@ def run_json_mode():
 def print_performance(title, sizes, inputs):
     """크기별 평균 MAC 시간(ms)과 연산 횟수(N²) 표를 출력한다."""
     print_header(f"{title} (평균/{REPEAT}회)")
-    print(f"{'크기':<8}{'평균 시간(ms)':>14}{'연산 횟수(N²)':>14}")
-    print("-" * 40)
+    print(f"{'크기':<8}{'2D 평균(ms)':>13}{'1D 평균(ms)':>13}{'연산 횟수(N²)':>14}")
+    print("-" * 52)
     for n in sizes:
         pattern, filter_matrix = inputs[n]
-        ms = measure_ms(mac, pattern, filter_matrix)
-        print(f"{f'{n}×{n}':<8}{ms:>14.4f}{n * n:>14}")
+        ms_2d = measure_ms(mac, pattern, filter_matrix)
+        flat_pattern = flatten(pattern)        # 펴는 시간은 측정에서 제외
+        flat_filter = flatten(filter_matrix)
+        ms_1d = measure_ms(mac_flat, flat_pattern, flat_filter)
+        print(f"{f'{n}×{n}':<8}{ms_2d:>13.4f}{ms_1d:>13.4f}{n * n:>14}")
+    print("(2D = 이중 for 문, 1D = 길이 N² 리스트 한 번 순회 / 같은 입력, 같은 반복 횟수)")
 
 
 # ================================================================
@@ -444,6 +482,53 @@ def print_summary(results):
 
 
 # ================================================================
+# 12. 모드 3: 패턴 생성기 (보너스)
+# ================================================================
+def read_size():
+    """패턴 크기 N (3 이상 홀수 권장, 최대 51)을 입력받는다."""
+    while True:
+        text = input("패턴 크기 N 입력 (3~51): ").strip()
+        try:
+            n = int(text)
+        except ValueError:
+            print("  ⚠️ 숫자를 입력하세요.")
+            continue
+        if n < 3 or n > 51:
+            print("  ⚠️ 3~51 사이로 입력하세요.")
+            continue
+        if n % 2 == 0:
+            print("  ℹ️ 짝수는 정중앙이 없어서 십자가가 한쪽으로 치우칩니다. (그래도 진행)")
+        return n
+
+
+def run_generator_mode():
+    """N 을 입력받아 십자가/X 패턴을 만들고, 자기 자신으로 판정 + 성능을 확인한다."""
+    n = read_size()
+    cross = generate_cross(n)
+    x_pattern = generate_x(n)
+    if n <= 13:
+        print(f"\n[{n}×{n} 십자가]")
+        for row in cross:
+            print("   " + "".join("■" if value else "□" for value in row))
+        print(f"\n[{n}×{n} X]")
+        for row in x_pattern:
+            print("   " + "".join("■" if value else "□" for value in row))
+    else:
+        print(f"\n({n}×{n} 은 화면이 커서 그림은 생략합니다)")
+
+    print()
+    print_header("생성 패턴 자체 판정 (필터도 생성기로 만든 십자가/X)")
+    for name, pattern in (("십자가 패턴", cross), ("X 패턴", x_pattern)):
+        cross_score = mac(pattern, cross)
+        x_score = mac(pattern, x_pattern)
+        result = judge(cross_score, x_score, CROSS, X, UNDECIDED)
+        print(f"{name}: Cross 점수 {cross_score} / X 점수 {x_score} → {result}")
+
+    print()
+    print_performance(f"성능 분석 ({n}×{n})", [n], {n: (cross, cross)})
+
+
+# ================================================================
 # 메인: 모드 선택
 # ================================================================
 def main():
@@ -453,12 +538,15 @@ def main():
             print("[모드 선택]")
             print("1. 사용자 입력 (3x3)")
             print("2. data.json 분석")
+            print("3. 패턴 생성기 (보너스)")
             print("0. 종료")
             choice = input("선택: ").strip()
             if choice == "1":
                 run_user_mode()
             elif choice == "2":
                 run_json_mode()
+            elif choice == "3":
+                run_generator_mode()
             elif choice == "0":
                 print("👋 시뮬레이터를 종료합니다.")
                 break
